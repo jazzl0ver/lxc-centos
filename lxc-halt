@@ -1,0 +1,107 @@
+#!/bin/bash
+#
+# halt          This file is executed by init when it goes into runlevel
+#               0 (halt) or runlevel 6 (reboot). It kills all processes,
+#               unmounts file systems and then either halts or reboots.
+#
+# Author:       Miquel van Smoorenburg, <miquels@drinkel.nl.mugnet.org>
+#               Modified for RHS Linux by Damien Neil
+#
+
+NOLOCALE=1
+. /etc/init.d/functions
+
+UMOUNT="umount"
+[ ! -w /etc ] && UMOUNT="umount -n"
+
+halt_crypto() {
+    fnval=0
+    while read dst src key; do
+        [ -z "$dst" -o "${dst#\#}" != "$dst" ] && continue
+        if [ -b "/dev/mapper/$dst" ]; then
+            if /sbin/dmsetup info "$dst" | grep -q '^Open count: *0$'; then
+                action $"Stopping disk encryption for $dst" /sbin/cryptsetup remove "$dst"
+            else
+                fnval=1
+            fi
+        fi
+    done < /etc/crypttab
+    return $fnval
+}
+
+kill_all() {
+    local STRING rc
+
+    STRING=$1
+    echo -n "$STRING "
+    shift
+    /sbin/killall5 "$@"
+    rc=$?
+    # Retval: 0: success 1: error 2: no processes found to kill
+    if [ "$rc" == 1 ]; then
+        failure $"$STRING"
+    else
+        success $"$STRING"
+    fi
+    echo
+    return $rc
+}
+
+# See how we were called.
+case "$0" in
+   *halt)
+        message=$"Halting system..."
+        command="/sbin/halt"
+        ;;
+   *reboot)
+        message=$"Please stand by while rebooting the system..."
+        command="/sbin/reboot"
+        kexec_command="/sbin/kexec"
+        ;;
+   *)
+        echo $"$0: call me as 'halt' or 'reboot' please!"
+        exit 1
+        ;;
+esac
+case "$1" in
+   *start)
+        ;;
+   *)
+        echo $"Usage: $0 {start}"
+        exit 1
+        ;;
+esac
+
+# Kill all processes.
+[ "${BASH+bash}" = bash ] && enable kill
+
+# Find mdmon pid's and omit killing them
+OMITARGS=
+for i in /dev/md/*.pid; do
+    if [ ! -r "$i" ]; then
+        continue
+    fi
+    OMITARGS="$OMITARGS -o $(cat $i)"
+done
+
+kill_all $"Sending all processes the TERM signal..." -15 $OMITARGS
+# No need to sleep and kill -9 if no processes to kill were found
+if [ "$?" == 0 ]; then
+    sleep 2
+    kill_all $"Sending all processes the KILL signal..." -9 $OMITARGS
+fi
+
+# Write to wtmp file before unmounting /var
+/sbin/halt -w
+
+# Save mixer settings, here for lack of a better place.
+if [ -s /etc/alsa/alsactl.conf -a -x /sbin/alsactl -a -w /etc/asound.state ]; then
+  action $"Saving mixer settings" /sbin/alsactl -E ALSA_CONFIG_PATH=/etc/alsa/alsactl.conf --ignore store
+fi
+
+# Save random seed
+touch /var/lib/random-seed
+chmod 600 /var/lib/random-seed
+action $"Saving random seed: " dd if=/dev/urandom of=/var/lib/random-seed count=1 bs=512 2>/dev/null
+
+$command -f
