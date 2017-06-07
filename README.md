@@ -19,3 +19,8 @@ lxc/tty4
 # For libvirt/Virtual Machine Monitor
 pts/0
 ```
+
+Or just run the command (under root):
+```
+wget https://raw.githubusercontent.com/jazzl0ver/lxc-centos/master/lxc-setup.sh -O - | /bin/bash
+```
